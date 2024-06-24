@@ -196,6 +196,10 @@ def apply_patch():
     code_snippets = request.args.get('code-snippets', default = '', type = str)
     function_name = request.args.get('function-name', default = '', type = str)
     patch_content = get_patch_file_by_cve(cve)
-    return jsonify(generate_patched_file_prompt(patch_content, code_snippets, function_name))
+    modified = generate_patched_file_prompt(patch_content, code_snippets, function_name)
+    return jsonify({
+        'original': patch_content,
+        'modified': modified
+    })
 
 

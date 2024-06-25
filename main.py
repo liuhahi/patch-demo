@@ -1,4 +1,5 @@
 from flask import Flask, jsonify, request
+import json
 import os
 import vertexai
 import socket
@@ -32,18 +33,14 @@ class CVEObject:
     def __init__(self, cve_id, versions):
         self.cve_id = cve_id
         self.versions = set(versions)  # Use a set to avoid duplicate versions
-
     def __hash__(self):
         return hash(self.cve_id)
-
     def __eq__(self, other):
         return self.cve_id == other.cve_id
-
     def to_dict(self):
         return {'cve_id': self.cve_id, 'versions': list(self.versions)}
-
     def add_version(self, new_version):
-        self.versions.add(new_version)    
+        self.versions.add(new_version)
 
 def add_cve_version(cve_objects, cve_id, new_version):
     ''' 
@@ -74,6 +71,14 @@ def extract_patch_content(patch_files):
         content = content + file.download_as_text()
     return content
 
+def get_target_file_by_cve_and_version(cve, version_number):
+    folder_prefix = f'{cve}/{version_number}/'
+    target_file = ""
+    for blob in bucket.list_blobs(prefix=folder_prefix, delimiter='/'):
+        if blob.name != folder_prefix:  # To avoid printing the folder itself
+            target_file = blob.download_as_text()
+    return target_file
+
 def get_patch_file_by_cve(cve):
     all_files_in_patch_files_folder = list(bucket.list_blobs(prefix=f'{cve}/patch-files/'))
     patch_files = [blob for blob in all_files_in_patch_files_folder if blob.name.endswith('.patch')]
@@ -82,6 +87,18 @@ def get_patch_file_by_cve(cve):
         print(f'{cve} has more than 1 patch')
     patch_content = extract_patch_content(patch_files)  
     return patch_content
+
+def is_array(diff_result):
+    return isinstance(diff_result, list)
+
+def remove_code_formatting(text):
+    parts = text.split('```c', 1)
+    if len(parts) > 1:
+        text = parts[-1].strip()
+    parts = text.rsplit('```', 1)
+    if len(parts) > 1:
+        text = parts[0].strip()
+    return text.strip()
 
 def extract_codesnippets_from_patch(patch_context):
     full_prompt = """\    
@@ -114,7 +131,7 @@ def extract_function_name_prompt(steps):
     
     which function gets modified?
     
-    output the function name
+    output the function name only
     """    
     formatted_prompt = full_prompt.format(
         steps=steps
@@ -174,6 +191,7 @@ def list_all_cve_objects():
         else:
             add_cve_version(object_list, cve_id, version_number)     
     obj_list = [obj.to_dict() for obj in object_list]
+    print('obj_list', obj_list)
     return jsonify(obj_list)
 
 @app.route("/extract-code-snippets/")
@@ -193,13 +211,14 @@ def extract_function_name():
 @cross_origin()
 def apply_patch():
     cve = request.args.get('cve', default = '', type = str)
+    version_number = request.args.get('version-number', default = '', type = str)
     code_snippets = request.args.get('code-snippets', default = '', type = str)
     function_name = request.args.get('function-name', default = '', type = str)
-    patch_content = get_patch_file_by_cve(cve)
-    modified = generate_patched_file_prompt(patch_content, code_snippets, function_name)
+    target_file = get_target_file_by_cve_and_version(cve, version_number)
+    modified = generate_patched_file_prompt(target_file, code_snippets, function_name)
     return jsonify({
-        'original': patch_content,
-        'modified': modified
+        'original': target_file,
+        'modified': remove_code_formatting(modified)
     })
 
 

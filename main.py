@@ -81,7 +81,7 @@ def get_target_file_by_cve_and_version(cve, version_number):
 
 def get_patch_file_by_cve(cve):
     all_files_in_patch_files_folder = list(bucket.list_blobs(prefix=f'{cve}/patch-files/'))
-    patch_files = [blob for blob in all_files_in_patch_files_folder if blob.name.endswith('.patch')]
+    patch_files = [blob for blob in all_files_in_patch_files_folder if blob.name.endswith('.diff')]
     print(f'what is patch_files, {patch_files}')
     if len(patch_files) > 1:
         print(f'{cve} has more than 1 patch')
@@ -101,20 +101,21 @@ def remove_code_formatting(text):
     return text.strip()
 
 def extract_codesnippets_from_patch(patch_context):
+    '''
+    Single hunk patch
+    '''
     full_prompt = """\    
-    From this file: 
+    From this git diff file: 
     ---file start---
     {patch_context}
     ---file end---
-    I want to remove the header and description, only keep the code snippets from diff,
-    in the remaining part
-    then, I want to identify the old lines and new lines for each diff
+    I want to identify the old lines and new lines for each diff
     should only output an array, which containing objects, each object has 2 propertys
     
     "old lines" property, containing old code snippet, 
     "new lines" property, containing new code snippet,
     
-    output the object only
+    output the array only
     """    
     formatted_prompt = full_prompt.format(
         patch_context=patch_context
@@ -220,5 +221,21 @@ def apply_patch():
         'original': target_file,
         'modified': remove_code_formatting(modified)
     })
+
+@app.route('/upload_target_file/', methods=['POST', 'GET'])
+@cross_origin()
+def fileUpload():
+    if request.method == 'POST':
+        file = request.files['file']
+        data = request.form
+        print('data', data)
+        filename = file.filename
+        # Create a new blob (file) in the bucket
+        blob = bucket.blob(f'{data["cve-id"]}/{data["subfolder"]}/{filename}')
+        # Upload the file
+        blob.upload_from_file(file)
+        return jsonify({"name": filename, "status": "success"})
+    else:
+        return jsonify({"status": "Upload API GET Request Running"})
 
 

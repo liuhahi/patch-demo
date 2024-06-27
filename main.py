@@ -110,10 +110,11 @@ def extract_codesnippets_from_patch(patch_context):
     {patch_context}
     ---file end---
     I want to identify the old lines and new lines for each diff
-    should only output an array, which containing objects, each object has 2 propertys
+    should only output an array, which containing objects, each object has 3 propertys
     
-    "old lines" property, containing old code snippet, 
-    "new lines" property, containing new code snippet,
+    "function name" property, the function name of this code snippet
+    "old lines" property, containing removed code snippet, 
+    "new lines" property, containing added code snippet,
     
     output the array only
     """    
@@ -123,11 +124,11 @@ def extract_codesnippets_from_patch(patch_context):
     # return formatted_prompt
     return gemini_pro(formatted_prompt, "application/json")
 
-def extract_function_name_prompt(steps):
+def extract_function_name_prompt(diff):
     full_prompt = """\    
     From this code snippet: 
     ---file start---
-    {steps}
+    {diff}
     ---file end---
     
     which function gets modified?
@@ -135,7 +136,7 @@ def extract_function_name_prompt(steps):
     output the function name only
     """    
     formatted_prompt = full_prompt.format(
-        steps=steps
+        diff=diff
     )
     # return formatted_prompt
     return gemini_pro(formatted_prompt, "text/plain")  
@@ -216,6 +217,7 @@ def apply_patch():
     code_snippets = request.args.get('code-snippets', default = '', type = str)
     function_name = request.args.get('function-name', default = '', type = str)
     target_file = get_target_file_by_cve_and_version(cve, version_number)
+    
     modified = generate_patched_file_prompt(target_file, code_snippets, function_name)
     return jsonify({
         'original': target_file,

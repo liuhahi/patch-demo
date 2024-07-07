@@ -1,11 +1,13 @@
 from flask import Flask, jsonify, request
 import json
+from urllib.parse import unquote
 import os
 import vertexai
 import socket
 import re
 from vertexai.preview.generative_models import GenerativeModel, Part
 from google.cloud import storage
+from anthropic import AnthropicVertex
 from flask_cors import CORS, cross_origin
 
 PROJECT_ID = 'ai-sandbox-company-34'
@@ -52,6 +54,27 @@ def add_cve_version(cve_objects, cve_id, new_version):
             return True
     return False
 
+def claude(full_prompt):
+    client = AnthropicVertex(region="us-east5", project_id=PROJECT_ID)
+    message = client.messages.create(
+        model="claude-3-5-sonnet@20240620",
+        system="You are a seasoned software developer, working in a Tech Unicorn.",
+        max_tokens=4096,
+        temperature=0,
+        messages=[
+            {
+                "role": "user",
+                "content": full_prompt,
+            },
+            {
+                "role": "assistant",
+                "content": "{",
+            }
+        ],
+    )
+    
+    return json.loads(message.model_dump_json(indent=2))['content']
+
 def gemini_pro(full_prompt, responseType):
     model = GenerativeModel("gemini-pro")
     responses = model.generate_content(
@@ -62,7 +85,7 @@ def gemini_pro(full_prompt, responseType):
         "response_mime_type": responseType,
         "temperature": 0,
         "top_p": 1
-    },stream=False,)    
+    },stream=False,)
     return(responses.text)
 
 def extract_patch_content(patch_files):
@@ -100,6 +123,41 @@ def remove_code_formatting(text):
         text = parts[0].strip()
     return text.strip()
 
+def decode_code_snippets(encoded_text):
+    print('encoded_text', encoded_text)
+    decoded_json = json.loads(encoded_text)
+    # for item in decoded_json:
+    #     if 'text' in item:
+    #         item['text'] = unquote(item['text'])
+    return decoded_json
+
+def convert_to_hunk_obj(data):
+    # Parse the JSON string into Python objects
+    text_value = data['text'].strip()
+    # if first charater is not '{' , then add it to complete the prefilling
+    if text_value[0] != '{':
+        text_value = '{' + text_value
+        
+    parsed_data = json.loads(text_value)
+
+    # Extract function_name, old_lines, and new_lines from the parsed data
+    function_name = parsed_data['changes'][0]['function_name']
+    old_lines = parsed_data['changes'][0]['old_lines']
+    new_lines = parsed_data['changes'][0]['new_lines']
+
+    # Remove leading '\n' from each line in old_lines and new_lines
+    old_lines = [line.strip() for line in old_lines]
+    new_lines = [line.strip() for line in new_lines]
+
+    # Construct the final object
+    result = {
+        'function_name': function_name,
+        'old_lines': old_lines,
+        'new_lines': new_lines
+    }
+    print('result:', result)
+    return result
+
 def extract_codesnippets_from_patch(patch_context):
     '''
     Single hunk patch
@@ -112,36 +170,43 @@ def extract_codesnippets_from_patch(patch_context):
     I want to identify the old lines and new lines for each diff
     should only output an array, which containing objects, each object has 3 propertys
     
-    "function name" property, the function name of this code snippet
-    "old lines" property, containing removed code snippet, 
-    "new lines" property, containing added code snippet,
+    Please provide the following information in JSON format:
     
-    output the array only
+    each object has following properties:
+    
+    "function_name" property, the function name of this code snippet, including funciton return type and arguments,
+    "old_lines" property, containing removed code snippet, 
+    "new_lines" property, containing added code snippet,
+    
+    and return an array of objects, the key for this array is "changes"
     """    
     formatted_prompt = full_prompt.format(
         patch_context=patch_context
     )
     # return formatted_prompt
-    return gemini_pro(formatted_prompt, "application/json")
+    return claude(full_prompt=formatted_prompt) 
 
-def extract_function_name_prompt(diff):
+def extract_target_function(target_file, function_name):
+    '''
+    Extract target function from target file
+    '''
     full_prompt = """\    
-    From this code snippet: 
-    ---file start---
-    {diff}
-    ---file end---
+    I have this target file:
     
-    which function gets modified?
+    ---target file start---
+    {target_file}
+    ---target file end---
     
-    output the function name only
+    I want to extract the target function: {function_name}
+    Please extract the function definition code snippets and return it    
     """    
     formatted_prompt = full_prompt.format(
-        diff=diff
+        target_file=target_file,
+        function_name=function_name
     )
-    # return formatted_prompt
-    return gemini_pro(formatted_prompt, "text/plain")  
+    return claude(full_prompt=formatted_prompt)
 
-def generate_patched_file_prompt(target_file, diff, function_name):
+def generate_patched_function(target_function, old_lines, new_lines):
     full_prompt = """\    
     You are an regex agent, you can replace old code with new code.
     You only do necessary changes when replace old code with new code.
@@ -149,26 +214,28 @@ def generate_patched_file_prompt(target_file, diff, function_name):
     Now, I have this diff:
     
     ---diff start---
-    {diff}
+    old lines: {old_lines}
+    
+    new lines: {new_lines}
     ---diff end---
     
-    in this target_file
-    ---target_file start---
-    {target_file}
-    ---target_file end---
+    in this target function
+    ---target function start---
+    {target_function}
+    ---target function end---
     
-    modify the target_file according to diff, inside {function_name} replace the old code with new code
+    modify the target function according to diff, replace the old code with new code
     add a trailing brief comment wherever you modified
     
-    output the full file in text/plain format
+    output the target function after modification
     """   
     formatted_prompt = full_prompt.format(
-        target_file=target_file,
-        diff=diff,
-        function_name=function_name
+        target_function=target_function,
+        old_lines=old_lines,
+        new_lines=new_lines
     )   
     # full_prompt = f'Use these steps {steps} to modify the file {target_file}, for each line, find the value in the "old" property in the file content, and replace with the content in the "new" property, output the modified file'
-    return gemini_pro(formatted_prompt, "text/plain")
+    return claude(formatted_prompt)
 
 @app.route("/cve-objects/")
 @cross_origin()
@@ -203,25 +270,31 @@ def extract_codesnippets():
     patch_content = get_patch_file_by_cve(cve)
     return jsonify(extract_codesnippets_from_patch(patch_content))
 
-@app.route("/extract-function-name/")
-@cross_origin()
-def extract_function_name():
-    code_snippets = request.args.get('code-snippets', default = '', type = str)
-    return jsonify(extract_function_name_prompt(code_snippets))
-
 @app.route("/apply-patch/")
 @cross_origin()
 def apply_patch():
     cve = request.args.get('cve', default = '', type = str)
     version_number = request.args.get('version-number', default = '', type = str)
     code_snippets = request.args.get('code-snippets', default = '', type = str)
-    function_name = request.args.get('function-name', default = '', type = str)
     target_file = get_target_file_by_cve_and_version(cve, version_number)
-    
-    modified = generate_patched_file_prompt(target_file, code_snippets, function_name)
+
+    code_snippets_array = decode_code_snippets(code_snippets)
+    print('original code_snippets_array', code_snippets_array)
+    print(f'code_snippets_array', type(code_snippets_array))
+    for item in code_snippets_array:
+        print(f'code_snippet: {item}')
+        obj = convert_to_hunk_obj(item)
+        print(f'obj: {obj}')
+        # extract target function from target file
+        target_function = extract_target_function(target_file, obj['function_name'])
+        print('target_function', target_function)
+        patched_function = generate_patched_function(target_function, obj['old_lines'], obj['new_lines'])
+        print('patched_function', patched_function)
+        # modified = generate_patched_function(target_file, code_snippets)
     return jsonify({
         'original': target_file,
-        'modified': remove_code_formatting(modified)
+        # 'modified': remove_code_formatting(modified)
+        'modified': 'modified file content here'
     })
 
 @app.route('/upload_target_file/', methods=['POST', 'GET'])

@@ -198,13 +198,25 @@ def extract_target_function(target_file, function_name):
     ---target file end---
     
     I want to extract the target function: {function_name}
-    Please extract the function definition code snippets and return it    
+    
+    Please extract the function definition code snippets and return an object, in JSON format,
+    
+    the object should have one property:
+    
+    "function_definition" the function definition code snippets    
+    
     """    
     formatted_prompt = full_prompt.format(
         target_file=target_file,
         function_name=function_name
     )
-    return claude(full_prompt=formatted_prompt)
+    result = claude(full_prompt=formatted_prompt)
+    text_value = result[0]['text'].strip()
+    # if first charater is not '{' , then add it to complete the prefilling
+    if text_value[0] != '{':
+        text_value = '{' + text_value        
+    parsed_data = json.loads(text_value)
+    return parsed_data['function_definition']
 
 def generate_patched_function(target_function, old_lines, new_lines):
     full_prompt = """\    
@@ -227,7 +239,11 @@ def generate_patched_function(target_function, old_lines, new_lines):
     modify the target function according to diff, replace the old code with new code
     add a trailing brief comment wherever you modified
     
-    output the target function after modification
+    output the target function after modification and return an object, in JSON format,
+    
+    the object should have one property:
+    
+    "modified" the function definition code snippets after modification
     """   
     formatted_prompt = full_prompt.format(
         target_function=target_function,
@@ -235,7 +251,14 @@ def generate_patched_function(target_function, old_lines, new_lines):
         new_lines=new_lines
     )   
     # full_prompt = f'Use these steps {steps} to modify the file {target_file}, for each line, find the value in the "old" property in the file content, and replace with the content in the "new" property, output the modified file'
-    return claude(formatted_prompt)
+    result = claude(formatted_prompt)
+    print('what is the modified result', result)
+    text_value = result[0]['text'].strip()
+    # if first charater is not '{' , then add it to complete the prefilling
+    if text_value[0] != '{':
+        text_value = '{' + text_value        
+    parsed_data = json.loads(text_value)    
+    return parsed_data['modified']    
 
 @app.route("/cve-objects/")
 @cross_origin()
@@ -289,12 +312,17 @@ def apply_patch():
         target_function = extract_target_function(target_file, obj['function_name'])
         print('target_function', target_function)
         patched_function = generate_patched_function(target_function, obj['old_lines'], obj['new_lines'])
+        
+        # split by target_function and replace it with the patched_function
+        head_and_tail = target_file.split(target_function)
+        assert len(head_and_tail) == 2
         print('patched_function', patched_function)
+        
         # modified = generate_patched_function(target_file, code_snippets)
     return jsonify({
         'original': target_file,
         # 'modified': remove_code_formatting(modified)
-        'modified': 'modified file content here'
+        'modified': patched_function.join(head_and_tail)
     })
 
 @app.route('/upload_target_file/', methods=['POST', 'GET'])

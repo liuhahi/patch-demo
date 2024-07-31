@@ -1,4 +1,5 @@
 from flask import Flask, jsonify, request
+import urllib.request
 import json
 from urllib.parse import unquote
 import os
@@ -75,19 +76,6 @@ def claude(full_prompt):
     
     return json.loads(message.model_dump_json(indent=2))['content']
 
-def gemini_pro(full_prompt, responseType):
-    model = GenerativeModel("gemini-pro")
-    responses = model.generate_content(
-    full_prompt,
-    generation_config={
-        "candidate_count": 1,
-        "max_output_tokens": 8190,
-        "response_mime_type": responseType,
-        "temperature": 0,
-        "top_p": 1
-    },stream=False,)
-    return(responses.text)
-
 def extract_patch_content(patch_files):
     content = ''
     for file in patch_files:
@@ -123,12 +111,38 @@ def remove_code_formatting(text):
         text = parts[0].strip()
     return text.strip()
 
-def decode_code_snippets(encoded_text):
-    print('encoded_text', encoded_text)
-    decoded_json = json.loads(encoded_text)
+def decode_code_snippets(input_string):
+    print('encoded_text', input_string)
+        
+        # Fix escape sequences
+        # Load JSON data
+    decoded_json = json.loads(input_string)
+    print("decoded json", decoded_json)
+    # Regular expression to extract all function_name values
+    function_name_regex = r'"function_name":(.*?)\\n'
+    old_lines_regex = r'"old_lines":(.*?)\]\\n'
+    new_lines_regex = r'"new_lines":(.*?)\],?\\n'
+
+    # Find all matches for function_name
+    function_names = re.findall(function_name_regex, str(decoded_json))
+    old_lines = re.findall(old_lines_regex, str(decoded_json))
+    new_lines = re.findall(new_lines_regex, str(decoded_json))    
+    # Print all function names
+    decoded_json = []
+    for index, function_name in enumerate(function_names):
+        decoded_json.append({
+            "function_name": function_name,
+            "old_lines": old_lines[index],
+            "new_lines": new_lines[index]
+        })
+        print(f"Function Name: {function_name}")
+        print(f"Old Lines: {old_lines[index]}")
+        print(f"New Lines: {new_lines[index]}")
+        
+    # decoded_json = json.loads(input_string)
     # for item in decoded_json:
     #     if 'text' in item:
-    #         item['text'] = unquote(item['text'])
+    #         item['text'] = unquote(item['text'])    
     return decoded_json
 
 def convert_to_hunk_obj(data):
@@ -304,28 +318,29 @@ def apply_patch():
     code_snippets_array = decode_code_snippets(code_snippets)
     print('original code_snippets_array', code_snippets_array)
     print(f'code_snippets_array', type(code_snippets_array))
+    print('total iterations:', len(code_snippets_array))
+    modified = target_file
     for item in code_snippets_array:
         print(f'code_snippet: {item}')
-        obj = convert_to_hunk_obj(item)
+        obj = item
         print(f'obj: {obj}')
         # extract target function from target file
-        target_function = extract_target_function(target_file, obj['function_name'])
+        target_function = extract_target_function(modified, obj['function_name'])
         print('target_function', target_function)
         patched_function = generate_patched_function(target_function, obj['old_lines'], obj['new_lines'])
         
         # split by target_function and replace it with the patched_function
-        head_and_tail = target_file.split(target_function)
-        assert len(head_and_tail) == 2
-        print('patched_function', patched_function)
+        head_and_tail = modified.split(target_function)
+        modified = patched_function.join(head_and_tail)
         
         # modified = generate_patched_function(target_file, code_snippets)
     return jsonify({
         'original': target_file,
         # 'modified': remove_code_formatting(modified)
-        'modified': patched_function.join(head_and_tail)
+        'modified': modified
     })
 
-@app.route('/upload_target_file/', methods=['POST', 'GET'])
+@app.route('/upload-target-file/', methods=['POST', 'GET'])
 @cross_origin()
 def fileUpload():
     if request.method == 'POST':
@@ -340,5 +355,83 @@ def fileUpload():
         return jsonify({"name": filename, "status": "success"})
     else:
         return jsonify({"status": "Upload API GET Request Running"})
+    
+@app.route('/get-vulnerable-files/', methods=['GET'])    
+@cross_origin()
+def get_vulnerable_files():
+    filenames = []
+    if request.method == 'GET':
+        cve = request.args.get('cve', default = '', type = str)
+        version = request.args.get('version', default = '', type = str)
+        all_files_in_patch_files_folder = list(bucket.list_blobs(prefix=f'{cve}/{version}/'))
+        filenames = [blob.name for blob in all_files_in_patch_files_folder]
+    print('what is all file_in', filenames)
+    return jsonify(filenames)
+    
+    
+@app.route('/get-patch-links/', methods=['GET'])
+@cross_origin()
+def get_current_patches():
+    filenames = []
+    if request.method == 'GET':
+        cve = request.args.get('cve', default = '', type = str)
+        all_files_in_patch_files_folder = list(bucket.list_blobs(prefix=f'{cve}/patch-files/'))
+        filenames = [os.path.splitext(blob.name)[0] for blob in all_files_in_patch_files_folder if blob.name.endswith('.diff')]
+    print('what is all file_in', filenames)
+    return jsonify(filenames)
+    
+@app.route('/submit-patch-links/', methods=['POST', 'GET'])
+@cross_origin()
+def submit_patches():
+    if request.method == 'POST':
+        data = request.get_json()
+        cve = data["cve-id"]
+        patches = data["patches"]
+        object_list = list(bucket.list_blobs(prefix=f'{cve}/patch-files/'))
+        print('object_list', object_list)
+        # Create a new blob (file) in the bucket
+        print('hao many patches', patches)
+        for patch in patches:
+            print('patch: ', patch)
+            filename = f"{patch.split('/')[-1]}.diff"
+            url = f"{patch}.diff"
+            # download the patch file
+            with urllib.request.urlopen(url) as f:
+                diff_file = f.read().decode('utf-8')
+            blob = bucket.blob(f'{data["cve-id"]}/{data["subfolder"]}/{filename}')
+            # Upload the diff file content to the blob
+            blob.upload_from_string(diff_file, content_type='text/plain')
+            print('upload finished')
+        all_files_in_patch_files_folder = list(bucket.list_blobs(prefix=f'{cve}/patch-files/'))
+        print('all files now', all_files_in_patch_files_folder)
+        # patch_files = [blob for blob in all_files_in_patch_files_folder if blob.name.endswith('.diff')]
+        # print(f'what is patch_files, {patch_files}')
+        """Delete a folder and its contents in a GCS bucket."""
+        
+        return jsonify({"name": 'okay', "status": "success"})
+    else:
+        return jsonify({"status": "Upload API GET Request Running"})    
 
+@app.route('/delete-patch-links/', methods=['POST', ''])
+@cross_origin()
+def delete_patches():
+    if request.method == 'POST':
+        data = request.get_json()
+        filename = data["filename"]
+        blob = bucket.blob(f'{data["cve-id"]}/patch-files/{filename}.diff')
+                # Delete the blob
+        blob.delete()
 
+    return jsonify({"message": f"Blob {filename} deleted from bucket", "status": "success"})
+
+@app.route('/delete-vulnerable-files/', methods=['POST'])
+@cross_origin()
+def delete_vulnerable_files():
+    if request.method == 'POST':
+        data = request.get_json()
+        version = data["version"]
+        filename = data["filename"]
+        blob = bucket.blob(f'{data["cve-id"]}/{version}/{filename}')
+        blob.delete()
+
+    return jsonify({"message": f"Blob {filename} deleted from bucket", "status": "success"})

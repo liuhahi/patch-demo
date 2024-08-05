@@ -1,1 +1,5 @@
+<<<<<<< HEAD
 flask_cors==4.0.1
+=======
+flask_cors==4.0.1
+>>>>>>> 0bb9078b3c27452ec9b9927ba30c9a92090bfbe7

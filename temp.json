@@ -1,0 +1,6 @@
+[
+  {
+    "text": "\n  \"changes\": [\n    {\n      \"function_name\": \"static int handle_vmon(struct kvm_vcpu *vcpu)\",\n      \"old_lines\": [],\n      \"new_lines\": [\n        \"/* CPL=0 must be checked manually. */\",\n        \"if (vmx_get_cpl(vcpu)) {\",\n        \"    kvm_queue_exception(vcpu, UD_VECTOR);\",\n        \"    return 1;\",\n        \"}\"\n      ]\n    },\n    {\n      \"function_name\": \"static int nested_vmx_check_permission(struct kvm_vcpu *vcpu)\",\n      \"old_lines\": [],\n      \"new_lines\": [\n        \"if (vmx_get_cpl(vcpu)) {\",\n        \"    kvm_queue_exception(vcpu, UD_VECTOR);\",\n        \"    return 0;\",\n        \"}\"\n      ]\n    },\n    {\n      \"function_name\": \"static int handle_vmread(struct kvm_vcpu *vcpu)\",\n      \"old_lines\": [\n        \"/* _system ok, as hardware has verified cpl=0 */\"\n      ],\n      \"new_lines\": [\n        \"/* _system ok, nested_vmx_check_permission has verified cpl=0 */\"\n      ]\n    },\n    {\n      \"function_name\": \"static int handle_vmptrst(struct kvm_vcpu *vcpu)\",\n      \"old_lines\": [\n        \"/* ok to use *_system, as hardware has verified cpl=0 */\"\n      ],\n      \"new_lines\": [\n        \"/* *_system ok, nested_vmx_check_permission has verified cpl=0 */\"\n      ]\n    }\n  ]\n}",
+    "type": "text"
+  }
+]

@@ -56,7 +56,7 @@ def add_cve_version(cve_objects, cve_id, new_version):
     return False
 
 def claude(full_prompt):
-    client = AnthropicVertex(region="us-east5", project_id=PROJECT_ID)
+    client = AnthropicVertex(region=GCS_BUCKET_LOCATION, project_id=PROJECT_ID)
     # for 3.5 claude-3-5-sonnet@20240620
     message = client.messages.create(
         model="claude-3-sonnet@20240229",

@@ -1,1 +1,1 @@
-# pip3 install -U 'anthropic[vertex]'
+flask_cors==4.0.1

@@ -8,10 +8,10 @@ from vertexai.preview.generative_models import GenerativeModel, Part
 from google.cloud import storage
 from flask_cors import CORS, cross_origin
 
-PROJECT_ID = 'ai-sandbox-company-34'
+PROJECT_ID = 'scantist-ai'
 
-GCS_BUCKET_LOCATION = "us-east1"
-GCS_BUCKET_NAME = "patch-demo-data-folder"
+GCS_BUCKET_LOCATION = "asia-southeast1-a"
+GCS_BUCKET_NAME = "patch-demo-data"
 GCS_BUCKET_URI = f"gs://{GCS_BUCKET_NAME}"
 
 
